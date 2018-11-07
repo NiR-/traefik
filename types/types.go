@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path"
+	"plugin"
 	"strconv"
 	"strings"
 
@@ -19,6 +21,7 @@ import (
 	traefiktls "github.com/containous/traefik/tls"
 	"github.com/mitchellh/hashstructure"
 	"github.com/ryanuber/go-glob"
+	"github.com/urfave/negroni"
 )
 
 // Backend holds backend configuration.
@@ -185,19 +188,20 @@ func (h *Headers) HasSecureHeadersDefined() bool {
 
 // Frontend holds frontend configuration.
 type Frontend struct {
-	EntryPoints       []string              `json:"entryPoints,omitempty" hash:"ignore"`
-	Backend           string                `json:"backend,omitempty"`
-	Routes            map[string]Route      `json:"routes,omitempty" hash:"ignore"`
-	PassHostHeader    bool                  `json:"passHostHeader,omitempty"`
-	PassTLSCert       bool                  `json:"passTLSCert,omitempty"` // Deprecated use PassTLSClientCert instead
-	PassTLSClientCert *TLSClientHeaders     `json:"passTLSClientCert,omitempty"`
-	Priority          int                   `json:"priority"`
-	WhiteList         *WhiteList            `json:"whiteList,omitempty"`
-	Headers           *Headers              `json:"headers,omitempty"`
-	Errors            map[string]*ErrorPage `json:"errors,omitempty"`
-	RateLimit         *RateLimit            `json:"ratelimit,omitempty"`
-	Redirect          *Redirect             `json:"redirect,omitempty"`
-	Auth              *Auth                 `json:"auth,omitempty"`
+	EntryPoints       []string                `json:"entryPoints,omitempty" hash:"ignore"`
+	Backend           string                  `json:"backend,omitempty"`
+	Routes            map[string]Route        `json:"routes,omitempty" hash:"ignore"`
+	PassHostHeader    bool                    `json:"passHostHeader,omitempty"`
+	PassTLSCert       bool                    `json:"passTLSCert,omitempty"` // Deprecated use PassTLSClientCert instead
+	PassTLSClientCert *TLSClientHeaders       `json:"passTLSClientCert,omitempty"`
+	Priority          int                     `json:"priority"`
+	WhiteList         *WhiteList              `json:"whiteList,omitempty"`
+	Headers           *Headers                `json:"headers,omitempty"`
+	Errors            map[string]*ErrorPage   `json:"errors,omitempty"`
+	RateLimit         *RateLimit              `json:"ratelimit,omitempty"`
+	Redirect          *Redirect               `json:"redirect,omitempty"`
+	Auth              *Auth                   `json:"auth,omitempty"`
+	Plugins           map[string]PluginConfig `json:"plugins,omitempty"`
 }
 
 // Hash returns the hash value of a Frontend struct.
@@ -679,4 +683,128 @@ type TLSCLientCertificateSubjectInfos struct {
 	Organization bool `description:"Add Organization info in header" json:"organization"`
 	CommonName   bool `description:"Add CommonName info in header" json:"commonName"`
 	SerialNumber bool `description:"Add SerialNumber info in header" json:"serialNumber"`
+}
+
+type Plugin struct {
+	Name     string       `description:"Name of the plugin for frontend config" json:"name"`
+	Path     string       `description:"Absolute path of the plugin file" json:"path"`
+	Global   bool         `description:"Enable the Plugin for every frontend" json:"global"`
+	Config   PluginConfig `description:"Global configuration of the plugin" json:"config"`
+	initFunc func(map[string]interface{}) (negroni.Handler, error)
+}
+
+type PluginConfig map[string]interface{}
+
+func loadPlugin(name string, path string, global bool, config PluginConfig) (*Plugin, error) {
+	plug, err := plugin.Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	handler, err := plug.Lookup("NewMiddleware")
+	if err != nil {
+		return nil, err
+	}
+
+	if _, ok := handler.(func(map[string]interface{}) (negroni.Handler, error)); !ok {
+		return nil, fmt.Errorf("%s.NewMiddleware has an invalid signature, should be: func(map[string]interface{}) (negroni.Handler, error)", name)
+	}
+
+	p := &Plugin{
+		Name:     name,
+		Path:     path,
+		Global:   global,
+		Config:   config,
+		initFunc: handler.(func(map[string]interface{}) (negroni.Handler, error)),
+	}
+
+	return p, nil
+}
+
+func (p *Plugin) WithConfig(config PluginConfig) *Plugin {
+	new := &Plugin{
+		Name:     p.Name,
+		Path:     p.Path,
+		Global:   p.Global,
+		Config:   p.Config,
+		initFunc: p.initFunc,
+	}
+
+	for k, v := range config {
+		new.Config[k] = v
+	}
+
+	return new
+}
+
+func (p *Plugin) NewMiddleware() (negroni.Handler, error) {
+	return p.initFunc(p.Config)
+}
+
+type Plugins map[string]*Plugin
+
+func (p Plugins) ListGlobals() []string {
+	globals := []string{}
+
+	for _, p := range p {
+		if p.Global {
+			globals = append(globals, p.Name)
+		}
+	}
+
+	return globals
+}
+
+func (p Plugins) String() string {
+	return fmt.Sprintf("%+v", map[string]*Plugin(p))
+}
+
+func (p *Plugins) Set(val string) error {
+	fields := strings.Fields(val)
+	vals := map[string]string{}
+	config := make(map[string]interface{})
+
+	for _, field := range fields {
+		subs := strings.SplitN(field, ":", 2)
+		key := strings.ToLower(subs[0])
+
+		if key == "config" {
+			subs = strings.SplitN(subs[1], "=", 2)
+			configkey := strings.ToLower(subs[0])
+			config[configkey] = subs[1]
+		} else {
+			vals[key] = subs[1]
+		}
+	}
+
+	// Default name is the plugin filename without its extension
+	if _, ok := vals["name"]; !ok {
+		basename := path.Base(vals["path"])
+		vals["name"] = strings.TrimSuffix(basename, path.Ext(basename))
+	}
+
+	// Plugins are globally-enabled by default
+	if _, ok := vals["global"]; !ok {
+		vals["global"] = "true"
+	}
+
+	global, err := strconv.ParseBool(vals["global"])
+	if err != nil {
+		return err
+	}
+
+	(*p)[vals["name"]], err = loadPlugin(vals["name"], vals["path"], global, config)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (p *Plugins) Get() interface{} {
+	return *p
+}
+
+func (p *Plugins) SetValue(val interface{}) {
+	*p = val.(Plugins)
 }

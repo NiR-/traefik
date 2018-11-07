@@ -113,6 +113,22 @@ func (s *Server) buildMiddlewares(frontendName string, frontend *types.Frontend,
 		middle = append(middle, handler)
 	}
 
+	// Add plugin middlewares and ensure all the requested plugins exist
+	for name, config := range frontend.Plugins {
+		p, ok := s.globalConfiguration.Plugins[name]
+		if !ok {
+			return nil, nil, nil, fmt.Errorf("Plugin %s has not been loaded", name)
+		}
+
+		handler, err := p.WithConfig(config).NewMiddleware()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
+		log.Debugf("Adding custom middleware from plugin %s to frontend %s", p.Name, frontendName)
+		middle = append(middle, handler)
+	}
+
 	return middle, buildModifyResponse(secureMiddleware, headerMiddleware), postConfig, nil
 }
 

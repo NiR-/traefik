@@ -299,6 +299,7 @@ func NewTraefikConfiguration() *TraefikConfiguration {
 		GlobalConfiguration: configuration.GlobalConfiguration{
 			EntryPoints:               map[string]*configuration.EntryPoint{},
 			Constraints:               types.Constraints{},
+			Plugins:                   types.Plugins{},
 			DefaultEntryPoints:        []string{"http"},
 			ProvidersThrottleDuration: parse.Duration(2 * time.Second),
 			MaxIdleConnsPerHost:       200,

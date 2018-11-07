@@ -336,6 +336,7 @@ func (s *Server) defaultConfigurationValues(configuration *types.Configuration) 
 
 func (s *Server) configureFrontends(frontends map[string]*types.Frontend) {
 	defaultEntrypoints := s.globalConfiguration.DefaultEntryPoints
+	globalPlugins := s.globalConfiguration.Plugins.ListGlobals()
 
 	for frontendName, frontend := range frontends {
 		// default endpoints if not defined in frontends
@@ -349,6 +350,7 @@ func (s *Server) configureFrontends(frontends map[string]*types.Frontend) {
 		}
 
 		frontend.EntryPoints = frontendEntryPoints
+		frontend.Plugins = s.addGlobalPluginConfigs(frontend.Plugins, globalPlugins)
 	}
 }
 
@@ -374,6 +376,18 @@ func (s *Server) filterEntryPoints(entryPoints []string) ([]string, []string) {
 	}
 
 	return frontendEntryPoints, undefinedEntryPoints
+}
+
+func (s *Server) addGlobalPluginConfigs(plugins map[string]types.PluginConfig, globalPlugins []string) map[string]types.PluginConfig {
+	if plugins == nil {
+		plugins = map[string]types.PluginConfig{}
+	}
+
+	for _, global := range globalPlugins {
+		plugins[global] = types.PluginConfig{}
+	}
+
+	return plugins
 }
 
 func configureBackends(backends map[string]*types.Backend) {
