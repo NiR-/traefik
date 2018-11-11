@@ -123,6 +123,12 @@
                                 <span class="tag is-info">{{ p.passTLSCert }}</span>
                               </div>
                             </div>
+                            <div class="control" *ngFor="let plugin of p.plugins">
+                              <div class="tags has-addons">
+                                <span class="tag is-light">Plugin</span>
+                                <span class="tag is-info">{{ plugin }}</span>
+                              </div>
+                            </div>
                           </div>
                         </div>
                       </div>

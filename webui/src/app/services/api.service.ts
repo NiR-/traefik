@@ -62,6 +62,7 @@ export class ApiService {
           .map(frontend => {
             frontend.routes = this.toArray(frontend.routes, 'id');
             frontend.errors = this.toArray(frontend.errors, 'id');
+            frontend.plugins = Object.keys(frontend.plugins);
             if (frontend.headers) {
               frontend.headers.customRequestHeaders = this.toHeaderArray(frontend.headers.customRequestHeaders);
               frontend.headers.customResponseHeaders = this.toHeaderArray(frontend.headers.customResponseHeaders);
